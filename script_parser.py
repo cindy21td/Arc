@@ -21,21 +21,45 @@ TOYSTORY = ["WOODY", "BUZZ", "ANDY", "POTATO HEAD", "REX", "SARGENT", "DAVIS", "
 
 
 class Movie_Script:
-	scenes = []
+	scenes = {}
+	chars = []
 
-	def __init__(self, fname):
-		self.scenes = self.parse_script(fname)
+	def __init__(self, fname, chars):
+		self.chars = chars
+		s = self.parse_script(fname)
+		self.group_scene(s)
+
+	def group_scene(self, s):
+		for i in range(0, len(s)):
+			x = s[i]
+			for y in x[0]:
+				if y not in self.scenes:
+					self.scenes[y] = []
+				self.scenes[y].append((x[1], i))
+		
 
 	def get_category(self, parag):
 		if parag[0].isupper() and len(parag) > 1:
 			return "d"
 		return "s"
 
+	def get_chars(self, scene):
+		c = []
+		for x in self.chars:
+			for y in scene:
+				if y[0] == "d" and x in y[2] and x not in c:
+					c.append(x)
+				elif x in y[1] and x not in c:
+					c.append(x)
+		return sorted(c)
+
 	def clean_scenes(self, lst):
 		clean = []
 		for l in lst:
 			if l.strip() == "" or (l.isupper() and [x for x in SCENE_HEAD if x in l]):
 				continue
+
+			# before split, find all char that occur on that scene
 			parag = l.split('\n')
 			parag = [x for x in parag if x.strip() != ""]
 			cat = self.get_category(parag)
@@ -47,7 +71,9 @@ class Movie_Script:
 			else:
 				content = " ".join([x.strip() for x in parag])
 				clean.append((cat, content))
-		return clean
+
+			all_char = self.get_chars(clean)
+		return clean, all_char
 
 	def parse_script(self, fname):
 		with open(fname, "r") as t_file:
@@ -62,9 +88,15 @@ class Movie_Script:
 		for i in range(0, len(parag)):
 			p = parag[i]
 			if "INT." in p or "EXT." in p:
-				scenes.append(self.clean_scenes(parag[idx:i]))
+				clean, chars = self.clean_scenes(parag[idx:i])
+				if len(chars) == 0:
+					continue
+				scenes.append((chars, clean))
 				idx = i
-		scenes.append(self.clean_scenes(parag[idx:]))
+		clean, chars = self.clean_scenes(parag[idx:])
+		if len(chars) != 0:
+			scenes.append((chars, clean))
+
 		return scenes
 
 
@@ -81,49 +113,6 @@ def get_sentiment_dict():
 		dct[word] = val
 
 	return dct
-
-def get_sentiment_value(txt, sen_dct):
-	val = 0
-	cnt = 0
-	token = txt.lower().split()
-	for t in token:
-		if t in sen_dct:
-			val += sen_dct[t]
-			cnt += 1
-
-	#if cnt == 0:
-	#	return 0
-	#return float(val) / cnt
-	return val
-
-def get_scene_sentiment(scene, sen_dct):
-	val = 0
-	for x in scene:
-		if x[0] != "s":
-			continue
-		txt = x[1]
-		val += get_sentiment_value(txt, sen_dct)
-	return val
-
-def print_scene_score(script, score):
-	# print result
-	#for x in sen_score:
-	#	print x
-
-
-	for i in range(0, len(script.scenes)):
-		txt = ""
-		#if i != 64:
-		#	continue
-		for x in script.scenes[i]:
-			if x[0] == "d":
-				continue
-			txt += x[1] + '\n'
-
-		print sen_score[i]
-		print txt
-		print
-		print
 
 def get_speaker(name, chars):
 	#print chars
@@ -156,71 +145,104 @@ def get_listener(scene, i, chars):
 	return None
 
 
-def get_dialogue_sentiment(script, chars, sen_dct):
+def get_dialogue_sentiment(scene, main_char, sen_dct, chars):
 	rel = {}
-	for j in range(0, len(script.scenes)):
-		scene = script.scenes[j]
-		for i in range(0, len(scene)):
-			line = scene[i]
-			if line[0] != "d":
-				continue
-			speaker = get_speaker(line[2], chars)
-			if speaker == None:
-				# minor character
-				continue
-			diag = line[1]
-			listener = get_listener(scene, i, chars)
-			if listener == None or listener == speaker:
-				# invalid
-				continue
+	rel["A"] = 0
+	rel["P"] = 0
 
-			cc = (speaker, listener)
-			if cc not in rel:
-				rel[cc] = {}
-			if j not in rel[cc]:
-				rel[cc][j] = []
-			score = get_sentiment_value(diag, sen_dct)
-			
-			rel[cc][j].append((score, diag))
+	for i in range(0, len(scene)):
+		line = scene[i]
+		if line[0] != "d":
+			continue
+		speaker = get_speaker(line[2], chars)
+		if speaker == None:
+			# minor character
+			continue
+		diag = line[1]
+		listener = get_listener(scene, i, chars)
+		if listener == None or listener == speaker:
+			# invalid
+			continue
+
+		score = get_sentiment_value(diag, sen_dct)
+
+		# active
+		if speaker == main_char:
+			rel["A"] += score
+		# passive
+		elif listener == main_char:
+			rel["P"] += score
+
 	return rel
 
-def get_diag_sen_summ(diag_sen):
-	summ = {}
-	for c in diag_sen:
-		summ[c] = []
-		scenes = diag_sen[c]
-		for i in sorted(scenes):
-			s = scenes[i]
-			lines = []
-			total = 0
 
-			for x in s:
-				total += x[0]
-				lines.append(x[1])
-			summ[c].append((i, total, lines))
+def get_sentiment_value(txt, sen_dct):
+	val = 0
+	cnt = 0
+	token = txt.lower().split()
+	for t in token:
+		if t in sen_dct:
+			val += sen_dct[t]
+			cnt += 1
 
-	return summ
+	#if cnt == 0:
+	#	return 0
+	#return float(val) / cnt
+	return val
+
+def get_scene_sentiment(scene, main_char, sen_dct, chars):
+	val = 0
+	# sentiment for naration
+	for x in scene:
+		if x[0] == "d":
+			continue
+		else:
+			txt = x[1]
+			val += get_sentiment_value(txt, sen_dct)
+
+	# sentiment for dialogue
+	rel = get_dialogue_sentiment(scene, main_char, sen_dct, chars)
+	return val, rel
+
+def print_scene_score(scores):
+	for x in scores:
+		print x
+		for y in scores[x]:
+			#print "\tIdx: ", y[3]
+			#print "\tScene: ", y[0]
+			#print "\tActive: ", y[1]["A"]
+			#print "\tPassive: ", y[1]["P"]
+			#print
+
+			print y[3], "\t", y[0], "\t", y[1]["A"], "\t", y[1]["P"]
+		print
+		print
+
 
 def main():
 	sen_dct = get_sentiment_dict()
-	#script = Movie_Script("frozen_script.txt")
-	script = Movie_Script("train_Toy Story.txt")
+	script = Movie_Script("frozen_script.txt", FROZEN)
+	#script = Movie_Script("train_Toy Story.txt")
 
 	# scene sentiment
-	sen_score = []
+	scores = {}
 	for x in script.scenes:
-		score = get_scene_sentiment(x, sen_dct)
-		sen_score.append(score)
+		scores[x] = []
+		for y in script.scenes[x]:
+			score, rel = get_scene_sentiment(y[0], x, sen_dct, FROZEN)
+			scores[x].append((score, rel, y[0], y[1]))
+
+	print_scene_score(scores)
 
 	# dialogue sentiment
-	diag_sen = get_dialogue_sentiment(script, TOYSTORY, sen_dct)
-	diag_summ = get_diag_sen_summ(diag_sen)
+	#diag_sen = get_dialogue_sentiment(script, FROZEN, sen_dct)
+	#diag_summ = get_diag_sen_summ(diag_sen)
 
-	for k in diag_summ:
-		print k
-		for x in diag_summ[k]:
-			print "\t", x[0], "\t", x[1]
-		print
+	#for k in diag_summ:
+	#	print k
+	#	for x in diag_summ[k]:
+	#		print "\t", x[0], "\t", x[1]
+	#	print
 
 	return
 
