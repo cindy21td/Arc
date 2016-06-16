@@ -1,32 +1,15 @@
 import re
-
-SCENE_HEAD = ["EXT.", 
-				"INT.", 
-				"CUT TO", 
-				"DISSOLVE TO", 
-				"FADE IN", 
-				"PAN TO", 
-				"WHITE OUT TO", 
-				"FADE OUT", 
-				"MOMENTS LATER", 
-				"PLAY MONTAGE",
-				"OPEN ON",
-				"THE END",
-				"ANGLE",
-				"SFX"]
-
-# MAIN CHARACTERS
-FROZEN = ["ANNA", "ELSA", "KRISTOFF", "HANS", "OLAF", "DUKE"]
-TOYSTORY = ["WOODY", "BUZZ", "ANDY", "POTATO HEAD", "REX", "SARGENT", "DAVIS", "SLINKY", "SID", "HANNAH"]
-
+import Labels
 
 class Movie_Script:
 	scenes = {}
 	chars = []
+	total_scenes = 0
 
 	def __init__(self, fname, chars):
 		self.chars = chars
 		s = self.parse_script(fname)
+		self.total_scenes = len(s)
 		self.group_scene(s)
 
 	def group_scene(self, s):
@@ -55,8 +38,9 @@ class Movie_Script:
 
 	def clean_scenes(self, lst):
 		clean = []
+		all_char = []
 		for l in lst:
-			if l.strip() == "" or (l.isupper() and [x for x in SCENE_HEAD if x in l]):
+			if l.strip() == "" or (l.isupper() and [x for x in Labels.SCENE_HEAD if x in l]):
 				continue
 
 			# before split, find all char that occur on that scene
@@ -185,9 +169,6 @@ def get_sentiment_value(txt, sen_dct):
 			val += sen_dct[t]
 			cnt += 1
 
-	#if cnt == 0:
-	#	return 0
-	#return float(val) / cnt
 	return val
 
 def get_scene_sentiment(scene, main_char, sen_dct, chars):
@@ -218,31 +199,104 @@ def print_scene_score(scores):
 		print
 		print
 
+def is_fluct(prev, curr, next):
+	# different delta
+	if (((curr - prev) > 0) != ((next - curr) > 0)):
+		return True
+	else:
+		return False
+
+def fluctuation(scores, total):
+	fluct = {}
+	for x in scores:
+		fluct[x] = [0, 0, 0]
+		if len(scores[x]) < 2:
+			continue
+		y = scores[x][0]
+		s_prev = y[0]
+		a_prev = y[1]["A"]
+		p_prev = y[1]["P"]
+		for i in range(1, len(scores[x]) - 1):
+			y = scores[x][i]
+
+			s_next = scores[x][i+1][0]
+			a_next = scores[x][i+1][1]["A"]
+			p_next = scores[x][i+1][1]["P"]
+
+			if is_fluct(s_prev, y[0], s_next):
+				fluct[x][0] += 1
+			if is_fluct(a_prev, y[1]["A"], a_next):
+				fluct[x][1] += 1
+			if is_fluct(p_prev, y[1]["P"], p_next):
+				fluct[x][2] += 1
+
+			# update prev
+			s_prev = y[0]
+			a_prev = y[1]["A"]
+			p_prev = y[1]["P"]
+
+		# normalize the fluctuation score
+		fluct[x][0] = float(fluct[x][0]) / total
+		fluct[x][1] = float(fluct[x][1]) / total
+		fluct[x][2] = float(fluct[x][2]) / total
+			
+	return fluct
+
+def create_features(scores, fluct, total):
+	features = {}
+	for char in fluct:
+		features[char] = []
+		# append the fluctuation scores
+		for x in fluct[char]:
+			features[char].append(x)
+
+		# number of occurrences
+		occur = float(len(scores[char])) / total
+		features[char].append(occur)
+
+		# total length of dialogue
+		d_len = 0
+		c_d = 0
+		for x in scores[char]:
+			for s in x[2]:
+				if s[0] == "d" and char in s[2]:
+					d_len += len(s[1])
+					c_d += 1
+
+		if c_d == 0:
+			features[char].append(0)
+		else:
+			features[char].append(float(d_len) / c_d)
+
+	return features
 
 def main():
 	sen_dct = get_sentiment_dict()
-	script = Movie_Script("frozen_script.txt", FROZEN)
-	#script = Movie_Script("train_Toy Story.txt")
 
-	# scene sentiment
-	scores = {}
-	for x in script.scenes:
-		scores[x] = []
-		for y in script.scenes[x]:
-			score, rel = get_scene_sentiment(y[0], x, sen_dct, FROZEN)
-			scores[x].append((score, rel, y[0], y[1]))
+	for m in Labels.MOVIES:
+		fname = m[0]
+		char_dct = m[1].keys()
+		#(fname, char_dct) = ("frozen_script.txt", Labels.FROZEN.keys())
+		#(fname, char_dct) = ("train_Toy Story.txt", TOYSTORY.keys())
+		script = Movie_Script(fname, char_dct)
 
-	print_scene_score(scores)
+		# scene sentiment
+		scores = {}
+		for x in script.scenes:
+			scores[x] = []
+			for y in script.scenes[x]:
+				score, rel = get_scene_sentiment(y[0], x, sen_dct, char_dct)
+				scores[x].append((score, rel, y[0], y[1]))
 
-	# dialogue sentiment
-	#diag_sen = get_dialogue_sentiment(script, FROZEN, sen_dct)
-	#diag_summ = get_diag_sen_summ(diag_sen)
+		#print_scene_score(scores)
 
-	#for k in diag_summ:
-	#	print k
-	#	for x in diag_summ[k]:
-	#		print "\t", x[0], "\t", x[1]
-	#	print
+		fluct = fluctuation(scores, script.total_scenes)
+
+		features = create_features(scores, fluct, script.total_scenes)
+
+		print fname
+		print features
+		print
 
 	return
 
